@@ -1,0 +1,639 @@
+---
+title: "Final Report for The Neural Activity of The Mice"
+author: "Kyoungdeok Han"
+date: "2025-03-06"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+# Abstract 
+
+Understanding how neural activity reacts to behavioral resonses in mich is crucial in this neuroscience research. This study collects the data from multiple experimental sessions, using machine learning and statististical approaches to analyze the pattern of brain function. Principal Componenet Analysis (PCA) is applied to reduce its dimensionality and identify dominant neural activity components. And, logistic regression is used to predict behavioral outcomes based on stimulus contrast and spike activity. Adding on, a random forest classifier is trained to differentiate sessions based on their neural signatures achieving high classification accuracy. To be more specific, sesssion 13 displayed distinct neural activity pattern showing unique cluster in PCA space. This deviation suggests potential difference in task engagement and experimental conditions leading to further investigation.
+
+
+#Introduction
+
+Neural activity is complex, and it varies across different cognitive states, task conditions, and environmental influences. To have better understanding in theses variations, this study explores neural spike data from multiple experimental sessions, EDA, classification models, and apply dimensionality reduction to uncover meaningful patterns. PCA is used to detect dominant neural components, discovering that most sessions have overlapping activity distributions while certain sessions like 13 show unique clusters. To explore how neural activity related to behavioral outcomes, we implement logistic regression identifying spike rate as the strongest predictor of trial success while stimulus contrast left and right shows minimal influence. Moreover, we train a random forest model to classify sessions based on neural features, achieving 99.26% accuracy. The unique neural pattern in session 13 brings up some questions about task adaptation, cognitive state differences, or external experimental facotrs, showing the need for further investigation into the nature of the distinct neural signature.
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+suppressWarnings(library(tidyverse))
+suppressWarnings(library(knitr))
+suppressWarnings(library(dplyr))
+suppressWarnings(library(ggplot2))
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+setwd("/Users/kyoungdeokhan/Desktop/STA141AProject/Data/")
+# Load data from provided session files
+session = list()
+for (i in 1:18) {
+  session[[i]] = readRDS(paste('Session/session', i, '.rds', sep=''))
+}
+head(session[[1]])
+```
+
+# What's in a session?
+```{r}
+names(session[[1]])
+```
+
+# TIBBLE
+```{r}
+
+n.session=length(session)
+
+table <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  table[i,1]=tmp$mouse_name;
+  table[i,2]=tmp$date_exp;
+  table[i,3]=length(unique(tmp$brain_area));
+  table[i,4]=dim(tmp$spks[[1]])[1];
+  table[i,5]=length(tmp$feedback_type);
+  table[i,6]=mean(tmp$feedback_type+1)/2;
+  }
+
+```
+
+```{r}
+options(repos = c(CRAN = "https://cloud.r-project.org/"))
+install.packages("kableExtra")
+```
+
+
+# Quick overview of the dataset
+```{r}
+library(knitr)
+library(kableExtra)
+library(dplyr)
+
+colnames(table) <- c("Mouse Name", "Experiment Date", "Number of Brain Areas", "Number of Neurons", "Number of Trials", "Success Rate")
+
+summary_stats <- table %>%
+  summarize(
+    `Mean Neurons` = round(mean(`Number of Neurons`), 2),
+    `Min Neurons` = min(`Number of Neurons`),
+    `Max Neurons` = max(`Number of Neurons`),
+    `Mean Trials` = round(mean(`Number of Trials`), 2),
+    `Min Trials` = min(`Number of Trials`),
+    `Max Trials` = max(`Number of Trials`),
+    `Mean Success Rate` = round(mean(`Success Rate`), 2),
+    `Min Success Rate` = min(`Success Rate`),
+    `Max Success Rate` = max(`Success Rate`)
+  )
+
+kable(table, format = "html", table.attr = "class='table table-striped'", digits = 2, 
+      caption = "Summary of Experimental Sessions") %>%
+  kableExtra::footnote(general = "Brain Areas = Number of distinct brain regions recorded per session.",
+                        footnote_as_chunk = TRUE, escape = FALSE) %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+
+kable(summary_stats, format = "html", caption = "Summary Statistics for Experimental Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+# I would like to focus only on session 13 as it showed unique pattern in PCA projection
+```{r}
+i.s=13 
+
+i.t=1 
+
+spk.trial = session[[i.s]]$spks[[i.t]]
+area=session[[i.s]]$brain_area
+
+spk.count=apply(spk.trial,1,sum)
+
+spk.average.tapply=tapply(spk.count, area, mean)
+
+
+tmp <- data.frame(
+  area = area,
+  spikes = spk.count
+)
+spk.average.dplyr =tmp %>%
+  group_by(area) %>%
+  summarize(mean= mean(spikes))
+
+
+```
+
+
+# The average number of spikes across neurons in each area as the activities for session 13
+```{r}
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+average_spike_area(1,this_session = session[[i.s]])
+
+```
+
+# Create a table that shows the summary of the trial for session 13
+```{r}
+n.trial=length(session[[i.s]]$feedback_type)
+n.area=length(unique(session[[i.s]]$brain_area ))
+
+
+trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+for(i.t in 1:n.trial){
+  trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                        session[[i.s]]$contrast_left[i.t],
+                        session[[i.s]]$contrast_right[i.s],
+                        i.t)
+}
+
+colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+trial.summary <- as_tibble(trial.summary)
+```
+
+
+```{r}
+str(trial.summary)
+```
+
+# The visual shows the average spike counts per brain area over multiple trials in Session 13.
+```{r}
+area.col=rainbow(n=n.area,alpha=0.7)
+# In base R, I usually initiate a blank plot before drawing anything on it
+plot(x=1,y=0, col='white',xlim=c(0,n.trial),ylim=c(0.5,2.2), xlab="Trials",ylab="Average spike counts", main=paste("Spikes per area in Session", i.s))
+
+
+for(i in 1:n.area){
+  lines(y=trial.summary[[i]],x=trial.summary$id,col=area.col[i],lty=2,lwd=1)
+  lines(smooth.spline(trial.summary$id, trial.summary[[i]]),col=area.col[i],lwd=3)
+  }
+legend("topright", 
+  legend = colnames(trial.summary)[1:n.area], 
+  col = area.col, 
+  lty = 1, 
+  cex = 0.8
+)
+
+
+```
+The spike counts fluctuate across the trials but some brain areas show stable trends (PL, ZI) while others shows strong variability
+
+Some areas show upward trend which implies the increase in activity over trials (ACA)
+--> this could possibly suggest neural adaptation over time, increased engagement and learning effects
+
+DG, ACA, and LGd shows higher spike counts than most of the brain areas 
+
+The wave-like patterns in the spike counts suggest cyclical neural activity in response to experimental conditions. It might also suggest long-term changes due to adaptation and fatigue
+
+```{r}
+
+plot.trial <- function(i.t, area, area.col, this_session) {
+  spks <- this_session$spks[[i.t]]
+  n.neuron <- dim(spks)[1]
+  time.points <- this_session$time[[i.t]]
+
+  plot(0, 0, xlim = c(min(time.points), max(time.points)), 
+       ylim = c(0, n.neuron + 1), col = 'white', 
+       xlab = 'Time (s)', yaxt = 'n', 
+       ylab = 'Neuron', 
+       main = paste('Trial', i.t, 'feedback', this_session$feedback_type[i.t]), 
+       cex.lab = 1.5)
+
+  for (i in 1:n.neuron) {
+    i.a <- which(area == this_session$brain_area[i])
+    col.this <- area.col[i.a]
+
+    ids.spike <- which(spks[i,] > 0)
+    if (length(ids.spike) > 0) {
+      points(x = time.points[ids.spike], 
+             y = rep(i, length(ids.spike)), 
+             pch = '.', cex = 2, col = col.this)
+    }
+  }
+
+  legend("topright", 
+         legend = area, 
+         col = area.col, 
+         pch = 16, 
+         cex = 0.8)
+}
+
+```
+
+# Raster Plot
+```{r, fig.width=8, fig.height=8}
+varname=names(trial.summary);
+area=varname[1:(length(varname)-4)]
+plot.trial(1,area, area.col,session[[i.s]])
+```
+Some neurons densely packed with spikes which indicates frequent fire (middle part of the plot) while others fire more sporadically (upper part)
+
+Some brain areas seem to be highly active (root, SCm) while others don't
+
+Spiking activity appears to be continuous from the visual suggesting no clear gaps. Neurons are firing consistently across the time period
+
+```{r, fig.width=8, fig.height=8}
+varname=names(trial.summary);
+area=varname[1:(length(varname)-4)]
+par(mfrow=c(1,2))
+plot.trial(1,area, area.col,session[[i.s]])
+plot.trial(2,area, area.col,session[[i.s]])
+
+par(mfrow=c(1,1))
+
+
+```
+Even though the time interval for these two plots is different, the general structure of neural firing appears similar in both time windows
+
+The low middle part of the plot shows dense spike activity meaning certain neurons are firing frequently
+
+Root and SCm still shows highly frequent spiking across both time segments while some areas like LGd, ZI shows less activity
+
+
+# Extra Information for Session 13
+```{r}
+i.s = 13  
+i.t = 1  
+
+spks.trial = session[[i.s]]$spks[[i.t]]
+area = session[[i.s]]$brain_area
+
+total.spikes = rowSums(spks.trial)
+
+active.spikes = mean(total.spikes[total.spikes > 0])
+
+avg.spikes = mean(total.spikes)
+
+cat("Average Spikes per Neuron:", avg.spikes, "\n")
+cat("Average Spikes per Active Neuron:", active.spikes, "\n")
+
+
+```
+```{r}
+print(ls())
+```
+```{r}
+spike_data <- data.frame(
+  brain_area = session[[i.s]]$brain_area,  # Extract brain area names
+  spike_count = rowSums(session[[i.s]]$spks[[1]])  # Sum spike counts per neuron
+)
+
+
+```
+
+```{r}
+
+avg.spikes.area <- tapply(spike_data$spike_count, spike_data$brain_area, mean)
+```
+
+
+```{r}
+spike_df <- data.frame(
+  Brain_Area = names(avg.spikes.area),  # Extract brain area names
+  Avg_Spikes = as.numeric(avg.spikes.area)  # Convert spike values to numeric
+)
+
+
+```
+
+
+# Bar chart of Average Spikes per Neuron by Brain Area for session 13
+```{r}
+library(ggplot2)
+
+ggplot(spike_df, aes(x = Brain_Area, y = Avg_Spikes, fill = Brain_Area)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Average Spikes per Neuron by Brain Area",
+       x = "Brain Area", y = "Avg Spikes per Neuron") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+```
+
+RN shows the highest average spike count showing over 8 spikes per neuron 
+
+MB, MRN, and MS also shows high spike counts
+
+ACA, CA1, DG, and LGd shows the lowest spike activity, indicating these areas might be less engaged in this specific task or have lower firing rates
+
+As the dataset corresponds to motor/decision-making task, areas like RN and MRN could be more firing
+
+
+```{r}
+
+df <- trial.summary
+
+colnames(df)
+```
+```{r}
+colnames(df) <- make.names(colnames(df))  # Converts names to valid R syntax
+print(colnames(df))  # Check the updated names
+
+```
+```{r}
+df$avg_spikes <- rowMeans(df[, 1:15], na.rm = TRUE)  # Adjust column range if needed
+```
+# Logistic Regression Model predicting feedback type(success and failure) based on Left Contrast, Right Contrast, and Average spikes per neuron
+```{r}
+library(caret) 
+set.seed(40)
+train_index <- createDataPartition(df$feedback, p = 0.8, list = FALSE)
+train_data <- df[train_index, ]
+test_data <- df[-train_index, ]
+
+model <- glm(feedback ~ left.contr. + right.contr. + avg_spikes, 
+             data = train_data, family = "gaussian")
+
+summary(model)
+
+```
+Average Spikes is the only significant predictor with the p-value being smaller than 0.001
+
+Right and Left Contrast do not have statistically significance influence to the outcome with the p-value being bigger than 0.05
+
+--> Spike rate is the strong predictor for trial success
+
+Lower AIC usually indicate better-fitting model, so the model might need more improvement by doing such things like adding interactions
+
+
+```{r}
+colnames(test_data)
+
+```
+
+# ROC Curve
+```{r}
+library(pROC)
+test_data$prob <- predict(model, newdata = test_data, type = "response")
+
+roc_curve <- roc(test_data$feedback, test_data$prob)
+
+plot(roc_curve, col = "blue", main = "ROC Curve for Logistic Regression Model")
+auc_value <- auc(roc_curve)
+cat("AUC:", auc_value, "\n")
+
+
+```
+The AUC value of 0.567 suggest that the model performs little bit better than random guessing which considered to be 0.5
+
+The blue ROC curve aligns really closely to the diagonal(grey line) which indicates the model does not seperate the successful and unsuccessful trials effectively
+
+The curve doesn't show a steep rise, meaning the model does not significantly differentiate the classes
+
+
+
+# Cutoffs
+```{r}
+best_cutoff <- as.numeric(coords(roc_curve, "best", ret = "threshold"))
+
+test_data$predicted_class <- ifelse(test_data$prob > 0.5, 1, 0)
+
+accuracy <- mean(test_data$predicted_class == as.numeric(test_data$feedback_type))
+cat("Optimal Cutoff Point:", best_cutoff, "\n")
+cat("Model Accuracy at Optimal Cutoff:", accuracy, "\n")
+```
+
+
+# PCA to identify the "key" components amoung neurons, we assume that the components identified by PCA are common across sessions and mice.
+
+```{r}
+pca_df 
+```
+
+
+# PCA Inspection
+```{r}
+knitr::opts_chunk$set(global = TRUE)
+
+
+print("Force printing:")
+print(str(pca_df))
+print(summary(pca_df))
+
+
+.GlobalEnv$pca_df <- pca_df
+print(ls(envir = .GlobalEnv))  
+
+
+```
+
+
+# PCA Variance Analysis Across Each Sessions
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+
+session_variance <- pca_df %>%
+  group_by(session_id) %>%
+  summarize(PC1_variance = var(PC1, na.rm = TRUE),
+            PC2_variance = var(PC2, na.rm = TRUE)) %>%
+  arrange(desc(PC1_variance), desc(PC2_variance))  # Order by highest variance
+
+top_pc1_session <- session_variance$session_id[which.max(session_variance$PC1_variance)]
+top_pc2_session <- session_variance$session_id[which.max(session_variance$PC2_variance)]
+
+cat("Session with highest PC1 variance:", top_pc1_session, "\n")
+cat("Session with highest PC2 variance:", top_pc2_session, "\n")
+
+unique_sessions <- c(3, 16)
+unique_session_data <- pca_df %>% filter(session_id %in% unique_sessions)
+
+ggplot(pca_df, aes(x = PC1, y = PC2, color = factor(session_id))) +
+  geom_point(alpha = 0.3) +  # Fade other sessions
+  geom_point(data = unique_session_data, aes(x = PC1, y = PC2, color = factor(session_id)), size = 2, alpha = 0.9) +  # Highlighted sessions
+  theme_minimal() +
+  labs(title = "PCA Projection: Highlighting Unique Patterns in Sessions 3 and 16",
+       x = "Principal Component 1",
+       y = "Principal Component 2",
+       color = "Session ID") +
+  scale_color_manual(values = c("8" = "red", "13" = "blue", "10" = "green"))  # Red for 3, Blue for 16
+
+print(unique_session_data)  # Display in console
+
+
+```
+Multiple sessions (1-10) overlap which suggests similar neural activity patterns across these sessions. It supports the hypothesis that some neural activity components are shared across sessions
+
+For session13, there appears a distinct cluster at the top of the visual which is clearly seperated from the others. This implies session 13 had a unique neural activity pattern compared to other sessions. It might be due to a particular brain region or neuron population being activated uniquely in this session. 
+
+The spread is linear on the left. Session 8 follows a clear trend along PC1, which means the neural activity gradualy varies instead of having distinct clusters. --> progressive shift in neural states
+
+I also observed slightly unique patter for session 10 existing on the right end of the plot
+
+Because of the unique clusters, I decided to take further steps to conduct further analysis and adding on to that, I go back to EDA part to dive deeper into session 13 that showed the unique pattern
+
+Even though the principal are different, the cluster that I have shows that my exploration might be meaningful
+
+
+# Dive Deeper into session 8,10, and 13
+```{r}
+library(tidyverse)
+
+unique_sessions <- c(8, 10, 13)
+unique_session_data <- pca_df %>% filter(session_id %in% unique_sessions)
+
+
+summary_stats <- unique_session_data %>%
+  group_by(session_id) %>%
+  summarise(
+    count = n(),
+    mean_PC1 = mean(PC1, na.rm = TRUE),
+    sd_PC1 = sd(PC1, na.rm = TRUE),
+    min_PC1 = min(PC1, na.rm = TRUE),
+    q25_PC1 = quantile(PC1, 0.25, na.rm = TRUE),
+    median_PC1 = median(PC1, na.rm = TRUE),
+    q75_PC1 = quantile(PC1, 0.75, na.rm = TRUE),
+    max_PC1 = max(PC1, na.rm = TRUE),
+    
+    mean_PC2 = mean(PC2, na.rm = TRUE),
+    sd_PC2 = sd(PC2, na.rm = TRUE),
+    min_PC2 = min(PC2, na.rm = TRUE),
+    q25_PC2 = quantile(PC2, 0.25, na.rm = TRUE),
+    median_PC2 = median(PC2, na.rm = TRUE),
+    q75_PC2 = quantile(PC2, 0.75, na.rm = TRUE),
+    max_PC2 = max(PC2, na.rm = TRUE)
+  )
+
+print(summary_stats)
+
+
+
+```
+
+
+# random forest pca classification using sessions except 8,10, and 13
+```{r}
+
+library(tidyverse)
+library(caret) 
+library(randomForest)  
+
+filtered_pca_df <- pca_df %>% filter(!(session_id %in% c(8, 10, 13)))
+
+set.seed(42)
+train_index <- createDataPartition(filtered_pca_df$session_id, p = 0.8, list = FALSE)
+train_data <- filtered_pca_df[train_index, ]
+test_data <- filtered_pca_df[-train_index, ]
+
+train_data$session_id <- as.factor(train_data$session_id)
+test_data$session_id <- as.factor(test_data$session_id)
+
+rf_model <- randomForest(session_id ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9 + PC10,
+                         data = train_data, importance = TRUE, ntree = 100)
+predictions <- predict(rf_model, test_data)
+
+predictions <- factor(predictions, levels = levels(test_data$session_id))
+
+conf_matrix <- confusionMatrix(predictions, test_data$session_id)
+
+print(conf_matrix)
+
+unique_sessions_data <- pca_df %>% filter(session_id %in% c(8, 10, 13))
+
+unique_sessions_data$session_id <- as.factor(unique_sessions_data$session_id)
+
+unique_predictions <- predict(rf_model, unique_sessions_data)
+
+unique_predictions <- factor(unique_predictions, levels = levels(train_data$session_id))
+
+unique_sessions_data$predicted_session <- unique_predictions
+print(unique_sessions_data %>% select(session_id, predicted_session))
+
+conf_matrix$overall["Accuracy"]
+
+
+```
+
+The model accuracy came out to be 99.26%, which is extremely high. The 95% confidence interval also indicates very reliable performance. NIR rate of 9.13% indicates that the most frequent class occurs about 9.31% of the time. As the accuracy is way higher than this, model is producing meaningful predictions. 
+
+Each row represents predicted sessions, and each column represents that actual sessions. 
+The diagonal elements shows correct classifications (ex; session 1 was predicted correctly 20 times)
+The off-diagonal elements indicate misclassifications (ex; session 17 was misclassified as session 1 once)
+
+There are High Precision Across Most Sessions (most sessions have zero misclassifications)
+A little bit of misclassification in Session 16 and 17 which might indicate that session 16 and 17 have overlapping characteristics possibly because of similar neural activity patterns
+
+
+# PCA Session 13 and 17 analysis
+```{r}
+library(tidyverse)
+library(ggplot2)
+
+session_13_17 <- pca_df %>% filter(session_id %in% c(13, 17))
+
+feature_list <- c("PC1", "PC2", "PC3", "PC4", "PC5", "PC6", "PC7", "PC8", "PC9", "PC10")
+
+ggplot(session_13_17, aes(x = PC1, fill = factor(session_id))) +
+  geom_histogram(alpha = 0.6, position = "identity", bins = 30) +
+  labs(title = "Distribution of PC1 for Sessions 13 and 17", fill = "Session") +
+  theme_minimal()
+
+ggplot(session_13_17, aes(x = PC1, color = factor(session_id))) +
+  geom_density() +
+  labs(title = "Density of PC1 for Sessions 13 and 17", color = "Session") +
+  theme_minimal()
+
+summary_stats <- session_13_17 %>%
+  group_by(session_id) %>%
+  summarise(across(all_of(feature_list), list(mean = mean, sd = sd, min = min, max = max)))
+
+print(summary_stats)
+
+ggplot(session_13_17, aes(x = factor(session_id), y = PC1, fill = factor(session_id))) +
+  geom_boxplot() +
+  labs(title = "Boxplot of PC1 for Sessions 13 and 17", x = "Session", y = "PC1") +
+  theme_minimal()
+
+cor_matrix <- cor(session_13_17 %>% select(all_of(feature_list)))
+print(cor_matrix)
+
+library(reshape2)
+melted_cor_matrix <- melt(cor_matrix)
+ggplot(melted_cor_matrix, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "black", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Heatmap of PCA Components for Sessions 13 and 17") +
+  theme_minimal()
+
+
+```
+Session 13 and 17 are clearly different in PCA space, especially in PC1
+
+PC1 completely seperates the two sessions, suggesting different neural patterns, experimental, external conditions
+
+The correlation shown from the heatmap diplays possible shared neural features across sessions
+If certain PCs are always correlated across sessions, they might indicate shared neural processes
+
+
+# Discussion
+
+The unexpected PCA seperation of Session 13 highlightst a potential fundamental difference in neural activity compared to other sessions. Session 13 shows clearly isolated cluster which suggests a shift in neural representation. To inspect the cause, we analyze spike count distributions, experimental variables, logistic regression predictions, and classification models. (No definitive factor was identified) We can set up several hypothesis according to this; unrecored experimental variations, learning effects leading to distinct neural adaptation. In spite of the analysis that I conducted, the reason for the deviation remains unclear, highlighting the need for additional metadata and alternative analytical approaches. This finding again underlines the complexity of neural activity and suggests further research focusing on behavioral metrics and environmental conditions to gain better understanding in nerual siganture's evolution over time. 
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

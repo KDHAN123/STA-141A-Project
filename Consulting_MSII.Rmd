@@ -1,0 +1,137 @@
+---
+title: "Course Project Consulting, Milestone II"
+date: " "
+output: html_document
+---
+
+```{r echo=FALSE, eval=TRUE,   message=FALSE}
+
+suppressWarnings(library(tidyverse))
+suppressWarnings(library(knitr))
+suppressWarnings(library(dplyr))
+
+```
+
+*You are welcome to adapt the code and ideas from any project consulting sessions without the requirement of acknowledgment*, **as long as you comprehend their underlying principles.** *To be specific, you should be capable of justifying the proposed analysis comprehensively in your report.*
+
+
+
+```{r echo=FALSE, eval=TRUE}
+# Load the data 
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('./Data/session',i,'.rds',sep=''))
+  }
+```
+
+## Objective: Data Integration
+
+
+From the project description, we can see that the ultimate goal of the course project is to predict the outcome (i.e. `feedback_type`) in the test set that contains 100 trials from Session 1 and Session 18. However, as we see from Milestone I, data structure differs across sessions. For instance, Session 1 contains 734 neurons from 8 brain areas, where Session 2 contains 1070 neurons from 5 brain areas. 
+
+
+```{r echo=FALSE, eval=TRUE}
+
+n.session=4
+
+# in library tidyverse
+meta <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+for(i in 1:4){
+  tmp = session[[i]];
+  meta[i,1]=tmp$mouse_name;
+  meta[i,2]=tmp$date_exp;
+  meta[i,3]=length(unique(tmp$brain_area));
+  meta[i,4]=dim(tmp$spks[[1]])[1];
+  meta[i,5]=length(tmp$feedback_type);
+  meta[i,6]=mean(tmp$feedback_type+1)/2;
+}
+kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+
+
+```
+
+
+## 2 Benchmark methods 
+
+### 2.1 Benchmark method 1
+
+Noting that the heterogeneity is due to the differences in neurons measured in each session, we can ignore the information about specific neurons by averaging over their activities. In particular, for each trial, we can first take the summation of spikes for each neuron, which results in a vector that contains the total number of spikes for all neurons during the 0.4 seconds in that trial; then, we take the average of the total number of spikes, which results in one number that is the average spike counts during that trial. Example code of this approach is shown below. 
+
+```{r} 
+
+spks.trial=session[[1]]$spks[[1]]
+total.spikes=apply(spks.trial,1,sum)
+(avg.spikes=mean(total.spikes))
+# average number of spikes per neuron in the first 0.4 seconds of Trial 1 in Session 1
+
+# average number of spikes per active neuron 
+
+# average number of spikes per neuron in Brain area X?
+
+```
+
+
+<span style="color: blue;"> Benchmark method 1 is a good starting point of your course project.  There are quite a few variants that you can come up with based on the data integration strategies proposed in Benchmark method 1. As you apply the benchmark method, you will identify drawbacks in the benchmark methods and, hopefully, come up with ideas to improve upon the benchmark method.  </span>
+
+
+### 2.2 Benchmark method 2
+
+Another solution is to build a prediction model using only the available data from Session 1 for the part of test data comes from Session 1, And similarly for Session 18. This approach, however, will not utilize the remaining 16 sessions which probably will lead to poor performance. To be more specific, there are only 114 trials available to train the model in Session 1, where the test data from Session 1 contains 100 trials. 
+
+
+
+<span style="color: red;"> Benchmark method 2 can only be used for comparison. This is because the report will lack an entire session on data integration if you take Benchmark method 2.  </span>
+
+
+
+## 3 Suggested practice after this session
+
+1. Calculate the average of spikes for all trials across all sessions
+
+2. Create a data frame that contains the following features: session ID, mouse name, trial ID, left contrast, right contrast, average spks, and feedback type. 
+
+3. Fit a logistic regression on this data frame, using the feedback type as the outcome, and left contrast, right contrast, and average spks as the covariate. 
+
+4. Draw the ROC curve for this model. 
+
+5. Select a cutoff point to predict the binary outcome. 
+
+
+
+## 4 Q&A
+
+1. How do we know if our prediction model performs "well"?
+   A: The report will **not** be graded based on the prediction performance. However, the prediction model you trained should at least outperform the naive predictor that predicts success for all trials. For instance, the success rate in Session 17 is 0.83, which means that the naive model has 83% chance of getting the prediction right! In fact, there were students who reported extremely high accuracy (e.g., 0.97), which raised doubts about the validity of their report. 
+   
+2. If performance is not graded, why do we have a test set? 
+   A: The test set will be released on the due date of the final report. It is rather a test for your code (e.g., whether you can apply it on the test data without having bugs), than an independent set to evaluate the performance of your code.  
+   
+   
+   
+## 5 Optional: Integration via unsupervised learning
+
+We can apply some of the statistical learning methods learned in this class to perform the integration. We can consider two approaches using clustering or principal component analysis. 
+
+
+<span style="color: blue;"> We provide only the assumptions and ideas below for both the clustering and PCA approaches. It is your responsibility to come up with a detailed analysis plan. You may, and probably should, utilize our office hours and consulting sessions for guidance on these approaches, once you have a rough plan in place. </span>
+
+### 5.1 Clustering 
+
+The heterogeneity across sessions arises from the fact that different groups of neurons were recorded in different sessions. However, it seems reasonable to assume that **there are underlying groups of neurons where the functions of these groups are identical across sessions and mice**, given that the neurons are all coming from one type of mice. Under this assumption, we can see the different neurons in each session as a result of observing different samples from these groups, but the group average remains the same. 
+
+Therefore, we can apply clustering method on neurons across all sessions to identify these groups (i.e., clusters). Then, we can take the group average (either as a total spike counts or average firing rate) as the new feature of each trial. 
+
+
+
+### 5.2 PCA or ICA
+
+
+Similar to the idea behind clustering, we can apply PCA (principal component analysis) or ICA (independent component analysis) to identify the "key" components amoung neurons, if we assume that **the components identified by PCA or ICA are common across sessions and mice**. 
